@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 import uuid
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from sqlalchemy import Column, String, Text, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
 from pydantic import BaseModel, Field, ConfigDict
@@ -67,23 +67,23 @@ class CitationModel(Base):
 
 
 # ==========================================
-# Pydantic Schemas for API Contracts
+# Pydantic Schemas for API Contracts (Pydantic v2 Clean)
 # ==========================================
 
 class CitationSchema(BaseModel):
-    guest: str = Field(..., description="Guest speaker name")
-    episode_title: str = Field(..., description="Title of the podcast episode")
-    timestamp: str = Field(..., description="Timestamp or time range in the podcast")
-    quote: str = Field(..., description="Verifiable excerpt from the transcript")
+    guest: str = Field(description="Guest speaker name")
+    episode_title: str = Field(description="Title of the podcast episode")
+    timestamp: str = Field(description="Timestamp or time range in the podcast")
+    quote: str = Field(description="Verifiable excerpt from the transcript")
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class ArtifactSchema(BaseModel):
     id: Optional[str] = None
-    title: str = Field(..., description="Artifact title or headline")
-    type: str = Field(..., description="'markdown' or 'html'")
-    content: str = Field(..., description="Complete rendered content of the artifact")
+    title: str = Field(description="Artifact title or headline")
+    type: str = Field(description="'markdown' or 'html'")
+    content: str = Field(description="Complete rendered content of the artifact")
     created_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
@@ -96,8 +96,8 @@ class MessageSchema(BaseModel):
     content: str
     model_used: Optional[str] = None
     created_at: datetime
-    citations: List[CitationSchema] = []
-    artifacts: List[ArtifactSchema] = []
+    citations: List[CitationSchema] = Field(default_factory=list)
+    artifacts: List[ArtifactSchema] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -124,22 +124,22 @@ class SessionDetailResponse(BaseModel):
     model_provider: str
     created_at: datetime
     updated_at: datetime
-    messages: List[MessageSchema] = []
+    messages: List[MessageSchema] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class ChatRequest(BaseModel):
-    message: str = Field(..., min_length=1, description="User prompt or question")
-    session_id: Optional[str] = Field(None, description="Existing session UUID, or null to auto-create")
-    model_provider: Optional[str] = Field(None, description="Override model provider: 'ollama', 'anthropic', 'openai'")
-    force_skill: Optional[str] = Field(None, description="Directly trigger skill: 'ship30' or 'artifact_html'")
+    message: str = Field(min_length=1, description="User prompt or question")
+    session_id: Optional[str] = Field(default=None, description="Existing session UUID, or null to auto-create")
+    model_provider: Optional[str] = Field(default=None, description="Override model provider: 'ollama', 'anthropic', 'openai'")
+    force_skill: Optional[str] = Field(default=None, description="Directly trigger skill: 'ship30' or 'artifact_html'")
 
 
 class ChatResponse(BaseModel):
     session_id: str
     message: str
-    citations: List[CitationSchema] = []
+    citations: List[CitationSchema] = Field(default_factory=list)
     artifact: Optional[ArtifactSchema] = None
     model_used: str
     created_at: datetime
@@ -147,10 +147,10 @@ class ChatResponse(BaseModel):
 
 class ModelStatusResponse(BaseModel):
     current_provider: str
-    available_providers: List[str]
-    ollama_status: dict
-    anthropic_status: dict
-    openai_status: dict
+    available_providers: List[str] = Field(default_factory=list)
+    ollama_status: Dict[str, Any] = Field(default_factory=dict)
+    anthropic_status: Dict[str, Any] = Field(default_factory=dict)
+    openai_status: Dict[str, Any] = Field(default_factory=dict)
 
 
 class HealthStatus(BaseModel):
@@ -159,4 +159,4 @@ class HealthStatus(BaseModel):
     version: str
     database: str
     transcripts_indexed: int
-    models_available: List[str]
+    models_available: List[str] = Field(default_factory=list)
