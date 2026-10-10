@@ -4,7 +4,11 @@ from typing import Optional, List, Dict, Any
 from sqlalchemy import Column, String, Text, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
 from pydantic import BaseModel, Field, ConfigDict
-from app.database import Base
+
+try:
+    from app.database import Base
+except ImportError:
+    from ..database import Base
 
 def utc_now():
     return datetime.now(timezone.utc)
