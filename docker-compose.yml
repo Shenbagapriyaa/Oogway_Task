@@ -1,0 +1,67 @@
+version: '3.8'
+
+services:
+  # 1. PostgreSQL Persistent Database
+  db:
+    image: postgres:15-alpine
+    container_name: lenny-assistant-db
+    restart: always
+    environment:
+      POSTGRES_USER: lenny_user
+      POSTGRES_PASSWORD: lenny_password
+      POSTGRES_DB: lenny_assistant
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lenny_user -d lenny_assistant"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2. Local Ollama LLM Service (Optional containerized local LLM)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: lenny-assistant-ollama
+    restart: always
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+
+  # 3. FastAPI Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: lenny-assistant-backend
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://lenny_user:lenny_password@db:5432/lenny_assistant
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: llama3.2
+      DEFAULT_PROVIDER: ollama
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    ports:
+      - "8000:8000"
+
+  # 4. React Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: lenny-assistant-frontend
+    restart: always
+    depends_on:
+      - backend
+    ports:
+      - "5173:80"
+
+volumes:
+  pgdata:
+  ollama_models:
