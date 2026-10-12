@@ -33,15 +33,15 @@ export function CitationCard({ citations }) {
       {/* Quote Inspection Modal */}
       {selectedCitation && (
         <div className="modal-overlay" onClick={() => setSelectedCitation(null)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-content" role="dialog" aria-modal="true" aria-labelledby="citation-dialog-title" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <div>
-                <div className="modal-guest">{selectedCitation.guest}</div>
+                <div className="modal-guest" id="citation-dialog-title">{selectedCitation.guest}</div>
                 <div className="modal-episode">
                   {selectedCitation.episode_title} • {selectedCitation.timestamp}
                 </div>
               </div>
-              <button className="btn-icon" onClick={() => setSelectedCitation(null)}>
+              <button className="btn-icon" type="button" aria-label="Close citation details" onClick={() => setSelectedCitation(null)}>
                 <X size={18} />
               </button>
             </div>
@@ -51,7 +51,8 @@ export function CitationCard({ citations }) {
             </div>
 
             <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end' }}>
-              <button 
+              <button
+                type="button"
                 className="btn-skill-tag"
                 onClick={() => setSelectedCitation(null)}
                 style={{ padding: '6px 14px' }}

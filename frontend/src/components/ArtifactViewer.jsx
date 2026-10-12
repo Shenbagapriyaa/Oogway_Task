@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Eye, Code, Copy, Check, Maximize2, Minimize2, X, ShieldCheck } from 'lucide-react';
-import { marked } from 'marked';
+import { renderMarkdown } from '../utils/renderMarkdown';
 import confetti from 'canvas-confetti';
 
 export function ArtifactViewer({
@@ -22,7 +22,7 @@ export function ArtifactViewer({
   };
 
   const isHtml = artifact.type === 'html';
-  const renderedMarkdown = !isHtml ? marked.parse(artifact.content) : '';
+  const renderedMarkdown = !isHtml ? renderMarkdown(artifact.content) : '';
 
   return (
     <div className={`artifact-pane ${isExpanded ? 'expanded' : ''}`}>
@@ -57,6 +57,8 @@ export function ArtifactViewer({
 
           <button
             className="btn-icon"
+              type="button"
+              aria-label="Copy artifact content"
             onClick={handleCopy}
             title="Copy artifact content to clipboard"
           >
@@ -65,6 +67,8 @@ export function ArtifactViewer({
 
           <button
             className="btn-icon"
+            type="button"
+            aria-label={isExpanded ? 'Collapse artifact viewer' : 'Expand artifact viewer'}
             onClick={onToggleExpand}
             title={isExpanded ? 'Collapse width' : 'Expand full width'}
           >
@@ -73,6 +77,8 @@ export function ArtifactViewer({
 
           <button
             className="btn-icon"
+            type="button"
+            aria-label="Close artifact viewer"
             onClick={onClose}
             title="Close artifact viewer"
           >
@@ -96,7 +102,7 @@ export function ArtifactViewer({
         <span>
           {isHtml 
             ? "Sandboxed Iframe Isolation: Script execution allowed; host origin & cookie access strictly blocked." 
-            : "Verified Grounded Markdown Artifact"}
+            : "Markdown sanitized before rendering"}
         </span>
       </div>
 

@@ -1,10 +1,12 @@
 import React from 'react';
-import { Sparkles, Cpu, Sidebar as SidebarIcon, Plus } from 'lucide-react';
+import { Sparkles, Cpu, Sidebar as SidebarIcon, Plus, Sun, Moon } from 'lucide-react';
 
 export function Navbar({
   selectedModel,
   onModelChange,
   modelStatus,
+  theme,
+  onToggleTheme,
   onToggleSidebar,
   onNewChat
 }) {
@@ -31,6 +33,8 @@ export function Navbar({
       <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
         <button 
           className="btn-icon" 
+          type="button"
+          aria-label="Toggle sessions sidebar"
           onClick={onToggleSidebar}
           title="Toggle Sessions Sidebar"
         >
@@ -53,6 +57,7 @@ export function Navbar({
           <span style={{ color: '#9ca3af', fontSize: '12px' }}>Engine:</span>
           <select 
             className="model-select"
+            aria-label="Select language model provider"
             value={selectedModel}
             onChange={(e) => onModelChange(e.target.value)}
           >
@@ -64,7 +69,17 @@ export function Navbar({
           <span className={`status-indicator ${currentStatusClass}`} />
         </div>
 
-        <button className="btn-new-chat" onClick={onNewChat} style={{ width: 'auto', padding: '7px 14px' }}>
+        <button
+          className="btn-icon theme-toggle"
+          type="button"
+          aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+          title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+          onClick={onToggleTheme}
+        >
+          {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+        </button>
+
+        <button className="btn-new-chat" type="button" onClick={onNewChat} style={{ width: 'auto', padding: '7px 14px' }}>
           <Plus size={16} />
           <span>New Chat</span>
         </button>

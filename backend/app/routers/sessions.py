@@ -17,6 +17,7 @@ def list_sessions(db: Session = Depends(get_db)):
             id=s.id,
             title=s.title,
             model_provider=s.model_provider,
+            user_metadata=s.user_metadata,
             created_at=s.created_at,
             updated_at=s.updated_at,
             message_count=len(s.messages)
@@ -27,7 +28,8 @@ def list_sessions(db: Session = Depends(get_db)):
 def create_session(payload: SessionCreate, db: Session = Depends(get_db)):
     session = SessionModel(
         title=payload.title or "New Growth Session",
-        model_provider=payload.model_provider or "ollama"
+        model_provider=payload.model_provider or "ollama",
+        user_metadata=payload.user_metadata
     )
     db.add(session)
     db.commit()
@@ -36,6 +38,7 @@ def create_session(payload: SessionCreate, db: Session = Depends(get_db)):
         id=session.id,
         title=session.title,
         model_provider=session.model_provider,
+        user_metadata=session.user_metadata,
         created_at=session.created_at,
         updated_at=session.updated_at,
         message_count=0
@@ -81,6 +84,7 @@ def get_session_detail(session_id: str, db: Session = Depends(get_db)):
         id=session.id,
         title=session.title,
         model_provider=session.model_provider,
+        user_metadata=session.user_metadata,
         created_at=session.created_at,
         updated_at=session.updated_at,
         messages=messages_data

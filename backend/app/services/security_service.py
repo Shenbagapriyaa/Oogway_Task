@@ -35,13 +35,15 @@ class SecurityService:
     RESTRICTIVE_CSP = (
         "<meta http-equiv=\"Content-Security-Policy\" content=\""
         "default-src 'none'; "
-        "style-src 'unsafe-inline' https://fonts.googleapis.com; "
-        "font-src https://fonts.gstatic.com; "
+        "style-src 'unsafe-inline'; "
+        "font-src data:; "
         "script-src 'unsafe-inline'; "
-        "img-src 'self' data: https:; "
+        "img-src data:; "
         "connect-src 'none'; "
         "frame-src 'none'; "
-        "object-src 'none';\">"
+        "object-src 'none'; "
+        "form-action 'none'; "
+        "base-uri 'none';\">"
     )
 
     def sanitize_html_artifact(self, raw_html: str) -> Tuple[str, List[str]]:

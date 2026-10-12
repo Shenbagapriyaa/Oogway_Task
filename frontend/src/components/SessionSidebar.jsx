@@ -28,9 +28,13 @@ export function SessionSidebar({
             <div
               key={s.id}
               className={`session-item ${s.id === activeSessionId ? 'active' : ''}`}
-              onClick={() => onSelectSession(s.id)}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', overflow: 'hidden' }}>
+              <button
+                type="button"
+                className="session-select"
+                aria-current={s.id === activeSessionId ? 'page' : undefined}
+                onClick={() => onSelectSession(s.id)}
+              >
                 <MessageSquare size={14} style={{ flexShrink: 0, opacity: 0.7 }} />
                 <div className="session-info">
                   <span className="session-title">{s.title || 'Growth Session'}</span>
@@ -41,9 +45,11 @@ export function SessionSidebar({
                     })}
                   </span>
                 </div>
-              </div>
+              </button>
               <button
                 className="btn-icon"
+                type="button"
+                aria-label={`Delete session ${s.title || 'Growth Session'}`}
                 onClick={(e) => {
                   e.stopPropagation();
                   onDeleteSession(s.id);

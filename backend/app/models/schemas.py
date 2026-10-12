@@ -1,8 +1,11 @@
 from datetime import datetime, timezone
 import uuid
 from typing import Optional, List, Dict, Any
-from sqlalchemy import Column, String, Text, DateTime, ForeignKey
+# pyrefly: ignore [missing-import]
+from sqlalchemy import Column, String, Text, DateTime, ForeignKey, JSON
+# pyrefly: ignore [missing-import]
 from sqlalchemy.orm import relationship
+# pyrefly: ignore [missing-import]
 from pydantic import BaseModel, Field, ConfigDict
 
 try:
@@ -23,6 +26,7 @@ class SessionModel(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     title = Column(String(255), nullable=False, default="New Growth Session")
     model_provider = Column(String(50), nullable=False, default="ollama")
+    user_metadata = Column(JSON, nullable=False, default=dict)
     created_at = Column(DateTime, default=utc_now)
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
 
@@ -109,12 +113,14 @@ class MessageSchema(BaseModel):
 class SessionCreate(BaseModel):
     title: Optional[str] = "New Growth Session"
     model_provider: Optional[str] = "ollama"
+    user_metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class SessionResponse(BaseModel):
     id: str
     title: str
     model_provider: str
+    user_metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
     message_count: Optional[int] = 0
@@ -126,6 +132,7 @@ class SessionDetailResponse(BaseModel):
     id: str
     title: str
     model_provider: str
+    user_metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
     messages: List[MessageSchema] = Field(default_factory=list)
@@ -137,7 +144,11 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1, description="User prompt or question")
     session_id: Optional[str] = Field(default=None, description="Existing session UUID, or null to auto-create")
     model_provider: Optional[str] = Field(default=None, description="Override model provider: 'ollama', 'anthropic', 'openai'")
-    force_skill: Optional[str] = Field(default=None, description="Directly trigger skill: 'ship30' or 'artifact_html'")
+    force_skill: Optional[str] = Field(
+        default=None,
+        description="Directly trigger 'ship30', 'artifact_html', or 'artifact_markdown'",
+    )
+    user_metadata: Optional[Dict[str, Any]] = Field(default=None, description="Optional metadata to associate with the session")
 
 
 class ChatResponse(BaseModel):
@@ -159,6 +170,7 @@ class ModelStatusResponse(BaseModel):
 
 class HealthStatus(BaseModel):
     status: str
+    database_status: str
     app_name: str
     version: str
     database: str

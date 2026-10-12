@@ -1,9 +1,10 @@
 import os
+import asyncio
 import httpx
 import logging
 from typing import List, Dict, Any, Optional, Tuple
 from app.config import settings
-from app.skills.ship30_writer import SHIP30_SYSTEM_PROMPT, generate_fallback_ship30_essay
+from app.skills.ship30_writer import SHIP30_SYSTEM_PROMPT, generate_source_brief
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,9 @@ class LLMService:
         context_chunks: List[Dict[str, Any]],
         provider: Optional[str] = None,
         is_ship30: bool = False,
-        is_html_artifact: bool = False
+        is_html_artifact: bool = False,
+        is_markdown_artifact: bool = False,
+        conversation_history: Optional[List[Dict[str, str]]] = None
     ) -> Tuple[str, str, Optional[Dict[str, str]]]:
         """
         Generate grounded assistant response.
@@ -77,7 +80,10 @@ class LLMService:
             ollama_health = await self.check_ollama_health()
             if ollama_health.get("available"):
                 try:
-                    return await self._call_ollama(prompt, context_str, is_ship30, is_html_artifact, context_chunks)
+                    return await self._call_ollama(
+                        prompt, context_str, is_ship30, is_html_artifact, context_chunks, conversation_history,
+                        is_markdown_artifact
+                    )
                 except Exception as e:
                     logger.warning(f"Ollama generation failed ({e}), falling back to deterministic engine.")
             else:
@@ -86,19 +92,27 @@ class LLMService:
         # 2. Anthropic Claude Execution
         elif target_provider == "anthropic" and settings.ANTHROPIC_API_KEY:
             try:
-                return await self._call_anthropic(prompt, context_str, is_ship30, is_html_artifact, context_chunks)
+                return await self._call_anthropic(
+                    prompt, context_str, is_ship30, is_html_artifact, context_chunks, conversation_history,
+                    is_markdown_artifact
+                )
             except Exception as e:
                 logger.warning(f"Anthropic generation failed ({e}), falling back.")
 
         # 3. OpenAI Execution
         elif target_provider == "openai" and settings.OPENAI_API_KEY:
             try:
-                return await self._call_openai(prompt, context_str, is_ship30, is_html_artifact, context_chunks)
+                return await self._call_openai(
+                    prompt, context_str, is_ship30, is_html_artifact, context_chunks, conversation_history,
+                    is_markdown_artifact
+                )
             except Exception as e:
                 logger.warning(f"OpenAI generation failed ({e}), falling back.")
 
         # 4. Grounded Fallback Engine
-        return self._generate_grounded_fallback(prompt, context_chunks, is_ship30, is_html_artifact)
+        return self._generate_grounded_fallback(
+            prompt, context_chunks, is_ship30, is_html_artifact, is_markdown_artifact
+        )
 
     def _format_context(self, chunks: List[Dict[str, Any]]) -> str:
         if not chunks:
@@ -115,10 +129,17 @@ class LLMService:
         return "\n---\n".join(formatted)
 
     async def _call_ollama(
-        self, prompt: str, context: str, is_ship30: bool, is_html_artifact: bool, chunks: List[Dict[str, Any]]
+        self,
+        prompt: str,
+        context: str,
+        is_ship30: bool,
+        is_html_artifact: bool,
+        chunks: List[Dict[str, Any]],
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        is_markdown_artifact: bool = False,
     ) -> Tuple[str, str, Optional[Dict[str, str]]]:
         system = SHIP30_SYSTEM_PROMPT if is_ship30 else SYSTEM_PROMPT
-        user_msg = f"TRANSCRIPT CONTEXT:\n{context}\n\nUSER REQUEST: {prompt}"
+        user_msg = self._format_user_prompt(prompt, context, conversation_history)
 
         async with httpx.AsyncClient(timeout=120.0) as client:
             res = await client.post(
@@ -133,48 +154,107 @@ class LLMService:
             res.raise_for_status()
             text = res.json().get("response", "")
 
-            artifact = self._extract_artifact(text, is_ship30, is_html_artifact, prompt, chunks)
+            artifact = self._extract_artifact(text, is_ship30, is_html_artifact, prompt, chunks, is_markdown_artifact)
             return text, f"ollama/{self.ollama_model}", artifact
 
     async def _call_anthropic(
-        self, prompt: str, context: str, is_ship30: bool, is_html_artifact: bool, chunks: List[Dict[str, Any]]
+        self,
+        prompt: str,
+        context: str,
+        is_ship30: bool,
+        is_html_artifact: bool,
+        chunks: List[Dict[str, Any]],
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        is_markdown_artifact: bool = False,
     ) -> Tuple[str, str, Optional[Dict[str, str]]]:
-        from anthropic import AsyncAnthropic
-        client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-        system = SHIP30_SYSTEM_PROMPT if is_ship30 else SYSTEM_PROMPT
-        user_msg = f"TRANSCRIPT CONTEXT:\n{context}\n\nUSER REQUEST: {prompt}"
+        from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock, query
 
-        message = await client.messages.create(
+        system = SHIP30_SYSTEM_PROMPT if is_ship30 else SYSTEM_PROMPT
+        options = ClaudeAgentOptions(
             model=settings.ANTHROPIC_MODEL,
-            max_tokens=4096,
-            system=system,
-            messages=[{"role": "user", "content": user_msg}]
+            system_prompt=system,
+            tools=[],
+            setting_sources=[],
+            permission_mode="dontAsk",
+            max_turns=1,
+            env={"ANTHROPIC_API_KEY": settings.ANTHROPIC_API_KEY},
         )
-        text = message.content[0].text
-        artifact = self._extract_artifact(text, is_ship30, is_html_artifact, prompt, chunks)
-        return text, f"anthropic/{settings.ANTHROPIC_MODEL}", artifact
+
+        async def collect_response() -> str:
+            response_parts = []
+            async for message in query(
+                prompt=self._format_user_prompt(prompt, context, conversation_history),
+                options=options,
+            ):
+                if isinstance(message, AssistantMessage):
+                    response_parts.extend(block.text for block in message.content if isinstance(block, TextBlock))
+                elif isinstance(message, ResultMessage) and message.is_error:
+                    raise RuntimeError("Claude Agent SDK returned an error")
+            return "\n".join(response_parts).strip()
+
+        response_text = await asyncio.wait_for(collect_response(), timeout=120.0)
+        if not response_text:
+            raise RuntimeError("Claude Agent SDK returned an empty response")
+        artifact = self._extract_artifact(
+            response_text, is_ship30, is_html_artifact, prompt, chunks, is_markdown_artifact
+        )
+        return response_text, f"anthropic/{settings.ANTHROPIC_MODEL}", artifact
 
     async def _call_openai(
-        self, prompt: str, context: str, is_ship30: bool, is_html_artifact: bool, chunks: List[Dict[str, Any]]
+        self,
+        prompt: str,
+        context: str,
+        is_ship30: bool,
+        is_html_artifact: bool,
+        chunks: List[Dict[str, Any]],
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        is_markdown_artifact: bool = False,
     ) -> Tuple[str, str, Optional[Dict[str, str]]]:
         from openai import AsyncOpenAI
-        client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY, timeout=120.0)
         system = SHIP30_SYSTEM_PROMPT if is_ship30 else SYSTEM_PROMPT
-        user_msg = f"TRANSCRIPT CONTEXT:\n{context}\n\nUSER REQUEST: {prompt}"
+        messages = self._format_provider_messages(prompt, context, conversation_history)
 
         res = await client.chat.completions.create(
             model=settings.OPENAI_MODEL,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user_msg}
-            ]
+            messages=[{"role": "system", "content": system}, *messages]
         )
         text = res.choices[0].message.content or ""
-        artifact = self._extract_artifact(text, is_ship30, is_html_artifact, prompt, chunks)
+        artifact = self._extract_artifact(text, is_ship30, is_html_artifact, prompt, chunks, is_markdown_artifact)
         return text, f"openai/{settings.OPENAI_MODEL}", artifact
 
+    def _format_user_prompt(
+        self, prompt: str, context: str, conversation_history: Optional[List[Dict[str, str]]]
+    ) -> str:
+        history = "\n".join(
+            f"{message['role'].upper()}: {message['content']}"
+            for message in (conversation_history or [])
+        )
+        return (
+            f"TRANSCRIPT CONTEXT:\n{context}\n\n"
+            f"CONVERSATION HISTORY:\n{history or 'No previous turns.'}\n\n"
+            f"CURRENT USER REQUEST: {prompt}"
+        )
+
+    def _format_provider_messages(
+        self, prompt: str, context: str, conversation_history: Optional[List[Dict[str, str]]]
+    ) -> List[Dict[str, str]]:
+        history = [
+            {"role": message["role"], "content": message["content"]}
+            for message in (conversation_history or [])
+            if message.get("role") in {"user", "assistant"} and message.get("content")
+        ]
+        history.append({"role": "user", "content": self._format_user_prompt(prompt, context, [])})
+        return history
+
     def _extract_artifact(
-        self, text: str, is_ship30: bool, is_html_artifact: bool, prompt: str, chunks: List[Dict[str, Any]]
+        self,
+        text: str,
+        is_ship30: bool,
+        is_html_artifact: bool,
+        prompt: str,
+        chunks: List[Dict[str, Any]],
+        is_markdown_artifact: bool = False,
     ) -> Optional[Dict[str, str]]:
         if is_ship30:
             return {
@@ -193,72 +273,77 @@ class LLMService:
                     "type": "html",
                     "content": html_code
                 }
+        if is_markdown_artifact:
+            return {
+                "title": f"Document: {prompt[:50]}",
+                "type": "markdown",
+                "content": text
+            }
         return None
 
     def _generate_grounded_fallback(
-        self, prompt: str, chunks: List[Dict[str, Any]], is_ship30: bool, is_html_artifact: bool
+        self,
+        prompt: str,
+        chunks: List[Dict[str, Any]],
+        is_ship30: bool,
+        is_html_artifact: bool,
+        is_markdown_artifact: bool = False,
     ) -> Tuple[str, str, Optional[Dict[str, str]]]:
-        """High-fidelity grounded synthesis engine when LLM is unavailable."""
+        """Return only source-backed material when no language model is available."""
         if not chunks:
             text = (
-                "Based on the available Lenny's Podcast transcripts, this specific topic is not directly covered in our library.\n\n"
-                "You can explore covered topics such as:\n"
-                "- **Elena Verna**: B2B product-led growth, recapturing PMF every 3 months, AI startup metrics\n"
-                "- **Keith Rabois**: Hiring barrels vs. ammo, product leadership, high agency\n"
-                "- **Brian Halligan**: HubSpot inbound marketing, scaling from $1M to $100M ARR\n"
-                "- **Eric Ries**: Lean Startup validation and rapid feedback loops\n"
-                "- **Marc Andreessen**: Product-market fit dynamics and technology supercycles"
+                "I couldn't find a relevant excerpt in the available Lenny's Podcast transcripts. "
+                "I don't have enough source material to answer this reliably."
             )
             return text, "grounded-fallback", None
 
         if is_ship30:
-            essay = generate_fallback_ship30_essay(prompt, chunks)
+            essay_brief = generate_source_brief(prompt, chunks)
             msg = (
-                f"I've generated a grounded **Ship 30 for 30 Atomic Essay (~1,250 words)** based on insights from "
-                f"**{chunks[0]['guest']}** in Lenny's Podcast. You can read, inspect, and copy the full rendered essay in the **Artifact Viewer** to your right!"
+                "The language model is unavailable, so I have not filled in unsupported claims to reach 1,250 words. "
+                "I prepared a short source-backed essay brief instead; the retrieved excerpts and attribution are in the Artifact Viewer."
             )
             return msg, "grounded-fallback", {
-                "title": f"Ship 30 Essay: The {chunks[0]['guest']} Playbook",
+                "title": f"Source-backed essay brief: {prompt[:45]}",
                 "type": "markdown",
-                "content": essay
+                "content": essay_brief
             }
 
         if is_html_artifact:
-            calculator_html = self._get_fallback_calculator_html(chunks[0]['guest'])
             msg = (
-                f"I've created an interactive **Growth & Viral Loop Calculator** in HTML/CSS grounded in the growth principles discussed by "
-                f"**{chunks[0]['guest']}**. The interactive artifact is rendered in the sandboxed **Artifact Viewer** on the right!"
+                "The language model is unavailable. I can show the built-in generic calculator, but it is an example, "
+                "not an artifact generated from or endorsed by the retrieved transcript."
             )
             return msg, "grounded-fallback", {
-                "title": f"Interactive Viral Growth Calculator ({chunks[0]['guest']})",
+                "title": "Generic viral coefficient calculator example",
                 "type": "html",
-                "content": calculator_html
+                "content": self._get_fallback_calculator_html("Example only")
             }
 
-        # Standard grounded answer synthesis
-        top = chunks[0]
-        guest = top["guest"]
-        title = top["title"]
-        timestamp = top["timestamp"]
-        quote = top["quote"]
-
-        response = (
-            f"According to **{guest}** on Lenny's Podcast (*{title}*, at `{timestamp}`):\n\n"
-            f"> \"{quote}\"\n\n"
-            f"### Key Tactical Takeaways from {guest}:\n\n"
-            f"1. **Core Growth Mechanism**: Growth in high-velocity companies is driven by fundamental structural loops rather than surface optimizations.\n"
-            f"2. **The Operator Mindset**: Focus 90% of effort on high-conviction reinvention bets. Optimization only works once product-market fit and distribution loops are established.\n"
-            f"3. **Execution Reality**: Teams must remove friction at the point of value creation so that users naturally activate their colleagues and peers."
-        )
-
-        if len(chunks) > 1:
-            second = chunks[1]
-            response += (
-                f"\n\nFurthermore, in *{second['title']}* (at `{second['timestamp']}`), "
-                f"**{second['guest']}** reinforces this concept:\n"
-                f"> \"{second['quote']}\""
+        if is_markdown_artifact:
+            artifact_content = generate_source_brief(prompt, chunks)
+            return (
+                "The language model is unavailable. I created a Markdown source brief from the retrieved excerpts, "
+                "without adding unsupported recommendations.",
+                "grounded-fallback",
+                {
+                    "title": f"Source brief: {prompt[:45]}",
+                    "type": "markdown",
+                    "content": artifact_content,
+                },
             )
 
+        excerpts = []
+        for chunk in chunks:
+            excerpts.append(
+                f"**{chunk['guest']}**, *{chunk['title']}* (`{chunk['timestamp']}`):\n\n"
+                f"> {chunk['quote']}"
+            )
+        response = (
+            "I found these relevant transcript excerpts. The fallback does not synthesize advice beyond what they say; "
+            "use a configured language model for analysis or recommendations.\n\n"
+            + "\n\n".join(excerpts)
+        )
         return response, "grounded-fallback", None
 
     def _get_fallback_calculator_html(self, guest: str) -> str:

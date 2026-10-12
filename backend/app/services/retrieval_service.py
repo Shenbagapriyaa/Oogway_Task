@@ -116,21 +116,68 @@ class RetrievalService:
         if not self.is_initialized:
             self.initialize()
 
-        results = self.retriever.search(query, top_k=top_k)
-        chunks = [r[0] for r in results]
+        results = self.retriever.search(query, top_k=top_k * 2)
+        query_terms = set(self.retriever.tokenize(query))
+        chunks = []
+        seen_sources = set()
+        guest_was_named = any(
+            part in query.lower()
+            for chunk in self.retriever.chunks
+            for part in chunk.get("guest", "").lower().split()
+            if len(part) > 2
+        )
+        for chunk, _ in results:
+            guest_terms = set(self.retriever.tokenize(chunk.get("guest", "")))
+            content_terms = query_terms - guest_terms
+            guest_turns = [
+                turn for turn in ingestion_service.extract_dialogues(chunk.get("text", ""))
+                if not turn["speaker"].casefold().startswith("lenny")
+            ]
+            ranked_turns = [
+                (len(content_terms.intersection(self.retriever.tokenize(turn["content"]))), turn)
+                for turn in guest_turns
+            ]
+            best_score, best_turn = max(ranked_turns, key=lambda item: item[0], default=(0, None))
+            if guest_was_named and content_terms and best_score == 0:
+                continue
+
+            selected = dict(chunk)
+            if best_turn and best_score:
+                selected["timestamp"] = best_turn["timestamp"]
+                text = best_turn["content"]
+                matching_terms = content_terms.intersection(self.retriever.tokenize(text))
+                term = max(matching_terms, key=len)
+                position = text.lower().find(term)
+                start = max(0, position - 120)
+                end = min(len(text), start + 360)
+                quote = text[start:end].strip()
+                if start:
+                    quote = "..." + quote
+                if end < len(text):
+                    quote += "..."
+                selected["quote"] = quote
+
+            quote_key = re.sub(r"\W+", " ", selected["quote"].casefold()).strip()
+            source_key = (selected["guest"].casefold(), selected["title"].casefold(), quote_key)
+            if source_key in seen_sources:
+                continue
+            seen_sources.add(source_key)
+            chunks.append(selected)
+            if len(chunks) == top_k:
+                break
         
         citations = []
-        seen_guests = set()
+        seen_citations = set()
         for c in chunks:
-            guest_ep = f"{c['guest']}_{c['timestamp']}"
-            if guest_ep not in seen_guests:
+            citation_key = (c["guest"].casefold(), c["title"].casefold(), c["quote"].casefold())
+            if citation_key not in seen_citations:
                 citations.append(CitationSchema(
                     guest=c["guest"],
                     episode_title=c["title"],
                     timestamp=c["timestamp"],
                     quote=c["quote"]
                 ))
-                seen_guests.add(guest_ep)
+                seen_citations.add(citation_key)
 
         return chunks, citations
 

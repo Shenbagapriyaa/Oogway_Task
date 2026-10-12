@@ -3,7 +3,7 @@
 **Forward Deployed Engineering Engagement**
 **Version:** 1.0.0  
 **Author:** Forward Deployed Engineer  
-**Status:** Approved & Implemented  
+**Status:** Prototype implemented; see known gaps below
 
 ---
 
@@ -20,32 +20,33 @@
   4. **Infrastructure Opacity:** Non-technical growth teams struggle with configuring local models, API keys, or Docker containers.
 
 ### 1.2 Measurable Success Metrics
+These are proposed acceptance targets, not measured outcomes. No user study or latency benchmark has been run for this prototype.
 1. **Product Adoption & Task Completion Rate:** $\ge 85\%$ of user queries result in either a cited answer or a generated native artifact without follow-up re-prompts.
 2. **Grounding & Citation Accuracy:** $100\%$ of substantive strategic claims are backed by an episode citation (Guest Name, Episode Title, Timestamp range, and direct transcript excerpt).
 3. **Artifact Generation Speed & Quality:** Time-to-artifact $< 4$ seconds on Cloud LLMs and $< 12$ seconds on local Ollama, with $0\%$ unsandboxed script execution vulnerabilities.
 4. **Evaluator Deployment Success (Operational Metric):** A new engineer or evaluator can launch the complete full-stack system from a clean clone in $< 2$ minutes using a single command.
 
 ### 1.3 Key Assumptions (Addressing Brief Ambiguities)
-1. **Model Availability:** Evaluators may run the tool on machines ranging from lightweight laptops (no local GPU/Ollama) to heavy developer workstations. *Decision:* Provide a triple-tier model layer: Local Ollama (mandatory for local demo), Cloud LLMs (Anthropic Claude & OpenAI), and an Intelligent Grounded Mock/Fallback engine that guarantees 100% functionality out of the box.
-2. **Database Environment:** Many evaluators do not have a dedicated PostgreSQL server running locally. *Decision:* Default to PostgreSQL connection string (compatible with Supabase, Railway, or Docker), but automatically and seamlessly fall back to local persistent SQLite (`data/lenny_assistant.db`) if PostgreSQL is unavailable.
-3. **Knowledge Base Scope:** Ingested 50 full, real transcripts from Lenny's official archive covering top tier operators (Elena Verna, Brian Halligan, Marc Andreessen, Keith Rabois, Tony Fadell, Eric Ries, etc.) with pre-indexed chunk metadata and speaker dialogue parsing.
-4. **Artifact Scope:** Artifacts encompass both rich structured Markdown documents (Ship 30 for 30 essays, PM specs, framework summaries) and complete interactive HTML/CSS components (growth calculators, conversion funnels, interactive decision trees).
+1. **Model Availability:** The local demo should run with Ollama; cloud options are available when credentials are configured. The deterministic fallback is intended for setup and source-inspection workflows, not as a substitute for generated analysis.
+2. **Database Environment:** A lightweight local run should not require a database server, so it defaults to SQLite. Docker Compose provides PostgreSQL for exercising that deployment path. A failed PostgreSQL connection falls back to SQLite at backend startup.
+3. **Knowledge Base Scope:** The submitted snapshot includes 50 local transcript Markdown files. It is a fixed corpus snapshot, not a live mirror of the full Lenny’s library.
+4. **Artifact Scope:** The application can return Markdown and HTML artifacts. Markdown can be requested directly; when no model is available, the fallback creates only a source brief. The built-in offline HTML calculator is a generic example, not a transcript-derived recommendation.
 
 ### 1.4 Scope Choices
 * **In Scope (Included):**
   * Full-stack conversational assistant with session management and persistence.
-  * Real-time semantic and lexical (BM25) hybrid retrieval across 50 complete Lenny podcast transcripts.
+  * Local BM25 lexical retrieval across 50 transcript files, with recent session turns used to clarify follow-up searches.
   * Rigorous source grounding with guest name, episode title, timestamp, and source quotes.
-  * Dedicated **Ship 30 for 30 Content Skill** producing ~1,250-word atomic essays adhering to Cole & Bush’s framework (1-3-1 rhythm, bold emphasis, hook, tactical pillars).
+  * Dedicated **Ship 30 for 30 writing prompt** for model-backed essays. Offline mode returns a cited source brief rather than inventing enough material to meet the requested length.
   * In-app Claude-style **Artifact Viewer** rendering Markdown and sandboxed HTML/CSS in a side-by-side responsive split view.
-  * Interactive security sandbox (`iframe` isolation without `allow-same-origin`) to prevent cross-site scripting or token theft.
+  * Sandboxed HTML preview and DOMPurify-sanitized Markdown rendering. These reduce risk but are not a substitute for a security review.
   * Multi-provider toggle: Ollama (local), Anthropic Claude, OpenAI, and Local Fallback.
-  * Comprehensive automated test suite and structured logging.
+  * Backend tests for API contracts, database persistence, retrieval, provider routing, essay fallback, and selected artifact-security behavior.
   * One-command startup script (`run.py` and `docker-compose.yml`).
 * **Out of Scope (Intentionally Excluded & Why):**
   * *Audio playback of original podcast files:* Increases repository size by gigabytes without adding strategic value over accurate timestamps and text excerpts.
   * *User authentication (Auth0/OAuth):* Adds setup friction for evaluators; local session UUIDs provide full session isolation without credential barriers.
-  * *Fine-tuning custom model weights:* RAG with accurate transcript chunking provides verifiable citations and zero hallucination risk, whereas fine-tuning is brittle and opaque.
+  * *Fine-tuning custom model weights:* Retrieval is simpler to inspect and update for this prototype. It does not eliminate hallucinations, so citations still need to be checked.
 
 ### 1.5 Risks and Trade-offs
 | Risk Area | Severity | Mitigation Strategy |
@@ -54,30 +55,38 @@
 | **Local Model Latency & Memory** | Medium | Configurable model choices in Ollama (`llama3.2`, `mistral`, `qwen2.5:1.5b`). If Ollama is slow or down, fallback displays a clear notification banner with diagnostic guidance. |
 | **Unsafe Artifact Rendering** | High | Sandboxed HTML preview inside an isolated `<iframe>` (`sandbox="allow-scripts"` without `allow-same-origin`), stripping external script injections and dangerous protocol handlers. |
 | **PostgreSQL Connection Failures** | Medium | Dual-engine database adapter: tests connection on boot; auto-switches to SQLite with persistent storage if PostgreSQL credentials are unset or invalid. |
-| **Cloud API Costs & Rate Limits** | Low | Local caching of retrieval embeddings and chunk metadata; token-efficient context window management. |
+| **Cloud API Costs & Rate Limits** | Medium | Local Ollama is the default. Cloud requests are optional; the Anthropic SDK call is bounded by a timeout. No retrieval-embedding cache is used. |
+
+### 1.6 Implementation Gaps
+* Retrieval is BM25 keyword search; semantic/vector retrieval is not implemented.
+* The data model supports optional session metadata and the UI identifies its client as `web`; there is no user authentication or identity verification.
+* Prompt instructions and citations improve traceability but do not guarantee that model-generated claims are fully supported. Users should inspect source excerpts.
+* The deterministic fallback returns source material and brief artifacts. Full-length essays and custom HTML require a configured language model.
+* PostgreSQL is provided through Docker Compose. A dedicated production deployment has not been configured or tested.
 
 ---
 
 ## 2. User Flows & Requirements
 
 ### 2.1 Core User Journey
-1. **Session Initialization:** User opens app; a new chat session is automatically initialized or selected from the sidebar history.
+1. **Session Initialization:** User opens the empty chat, starts a new chat, or selects a saved session. A chat session is persisted on its first message.
 2. **Model Selection:** Top navigation displays current active LLM (e.g. Local Ollama `llama3.2` or Cloud Claude `claude-3-5-sonnet`). User can toggle provider anytime.
-3. **Grounded Query:** User asks a product question (e.g. *"What did Elena Verna say about AI companies having to recapture product-market fit every 3 months?"*).
+3. **Grounded Query:** User asks a product question. The service retrieves chunks using BM25 and includes recent user questions in the query to help resolve follow-ups.
 4. **Citation Inspection:** Response answers the query and displays clickable Citation Cards showing the exact episode, guest, timestamp, and transcript quote.
-5. **Ship 30 for 30 Skill Trigger:** User clicks *"Generate Ship 30 Essay"* or types *"Write a Ship 30 for 30 essay on this"*. The assistant generates a ~1,250-word structured atomic essay.
+5. **Ship 30 for 30 Skill Trigger:** User clicks the Ship 30 prompt or requests an essay. With a configured model, the writing prompt requests an approximately 1,250-word structured essay; without one, the fallback returns a clearly labeled source brief.
 6. **Artifact Native Viewing:** Artifact opens in the side-by-side Artifact Viewer. User can toggle between rendered visual preview, raw code inspector, copy to clipboard, or download.
-7. **HTML/CSS Interactive Artifacts:** User can ask for an interactive growth calculator (e.g. *"Build an interactive viral coefficient calculator in HTML/CSS"*), which renders instantly and interactively in the sandbox.
+7. **HTML/CSS Interactive Artifacts:** User can request an HTML artifact, which is rendered in the sandbox. Without a configured model, only the generic example calculator is available.
 
 ---
 
 ## 3. Acceptance Criteria
-- [x] Full-stack architecture running FastAPI backend and React frontend.
-- [x] Multi-session persistence in PostgreSQL with SQLite fallback.
-- [x] Model switching between Ollama, Claude, OpenAI, and Local Fallback without restarting the application.
-- [x] Grounded citations on Lenny's Podcast transcripts with guest, episode, timestamp, and excerpt.
-- [x] Dedicated Ship 30 for 30 skill implementing 1,250-word atomic essay architecture.
-- [x] Claude-style Artifact Viewer rendering Markdown and sandboxed HTML/CSS side-by-side.
-- [x] Untrusted HTML isolation via sandboxed iframe preventing origin leakage.
-- [x] One-command startup script and full Docker Compose configuration.
-- [x] Complete automated test suite covering API, persistence, retrieval, skill, and security.
+- [x] FastAPI backend and React frontend, with direct and Docker Compose startup paths.
+- [x] Session/message/artifact/citation persistence using local SQLite or Compose PostgreSQL; optional metadata is stored per session.
+- [x] Provider selection for Ollama, Anthropic Agent SDK, OpenAI, and excerpt-based fallback.
+- [x] Recent session turns are passed to providers and recent user turns are included in retrieval queries.
+- [x] Citations contain guest, episode, chunk-start timestamp, and an excerpt.
+- [x] Model-backed Ship 30 prompt and Markdown/HTML artifact paths; fallback behavior is intentionally limited and labeled.
+- [x] HTML iframe sandbox and Markdown sanitization; security still requires review before production use.
+- [x] Backend automated tests pass locally. Manual UI scenarios and production PostgreSQL operation have not been independently verified.
+
+Semantic retrieval, authenticated user identity, cloud production deployment, and a recorded demo remain outside the implemented prototype.

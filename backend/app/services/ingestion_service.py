@@ -45,6 +45,14 @@ class IngestionService:
                 })
         return dialogues
 
+    @staticmethod
+    def infer_guest(dialogues: List[Dict[str, str]], fallback: str) -> str:
+        speakers = list(dict.fromkeys(
+            turn["speaker"] for turn in dialogues
+            if not turn["speaker"].casefold().startswith("lenny")
+        ))
+        return ", ".join(speakers) if speakers else fallback
+
     def chunk_dialogues(self, dialogues: List[Dict[str, str]], metadata: Dict[str, Any], max_words: int = 400) -> List[Dict[str, Any]]:
         """Combine speaker turns into coherent chunks with overlap."""
         chunks = []
@@ -104,6 +112,9 @@ class IngestionService:
             try:
                 with open(self.cache_file, "r", encoding="utf-8") as f:
                     self.chunks = json.load(f)
+                for chunk in self.chunks:
+                    dialogues = self.extract_dialogues(chunk.get("text", ""))
+                    chunk["guest"] = self.infer_guest(dialogues, chunk.get("guest", "Guest"))
                 logger.info(f"Loaded {len(self.chunks)} chunks from cache ({self.cache_file}).")
                 return self.chunks
             except Exception as e:
@@ -129,6 +140,7 @@ class IngestionService:
 
                 dialogues = self.extract_dialogues(body)
                 if dialogues:
+                    fm["guest"] = self.infer_guest(dialogues, fm["guest"])
                     file_chunks = self.chunk_dialogues(dialogues, fm)
                 else:
                     # Fallback plain paragraph chunking if speaker tags are absent

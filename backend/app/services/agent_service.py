@@ -1,4 +1,5 @@
 import logging
+import re
 import uuid
 from typing import Optional, List, Dict, Any, Tuple
 from sqlalchemy.orm import Session
@@ -13,18 +14,41 @@ from app.services.security_service import security_service
 logger = logging.getLogger(__name__)
 
 class AgentService:
-    def detect_intent(self, prompt: str, force_skill: Optional[str] = None) -> Tuple[bool, bool]:
-        """Detect whether to invoke Ship 30 skill or HTML artifact generator."""
+    FOLLOW_UP_REFERENCES = {"he", "she", "it", "they", "them", "this", "that", "these", "those"}
+
+    def is_follow_up_query(self, prompt: str) -> bool:
+        words = set(re.findall(r"\b[a-z]+\b", prompt.lower()))
+        return len(words) <= 18 and bool(words & self.FOLLOW_UP_REFERENCES)
+
+    @staticmethod
+    def is_greeting_intro(prompt: str) -> bool:
+        lower = prompt.strip().lower()
+        starts_with_greeting = bool(re.match(r"^(hi|hello|hey)\b", lower))
+        introduces_self = bool(re.search(r"\bi(?:'m| am)\s+[a-z]", lower))
+        asks_for_something = bool(re.search(
+            r"\?|\b(what|who|when|where|why|how|can you|could you|please|tell me|explain|write|draft|create|build|summarize|compare|find me|search for|help me|need help)\b",
+            lower,
+        ))
+        return starts_with_greeting and introduces_self and not asks_for_something
+
+    def detect_intent(self, prompt: str, force_skill: Optional[str] = None) -> Tuple[bool, bool, bool]:
+        """Detect writing-skill and artifact requests."""
         if force_skill == "ship30":
-            return True, False
+            return True, False, False
         if force_skill == "artifact_html":
-            return False, True
+            return False, True, False
+        if force_skill == "artifact_markdown":
+            return False, False, True
 
         lower = prompt.lower()
         is_ship30 = any(kw in lower for kw in ["ship 30", "ship30", "atomic essay", "1250 word", "write an essay", "write a post"])
         is_html = any(kw in lower for kw in ["calculator", "interactive", "html", "css", "dashboard", "prototype", "widget"])
+        asks_to_create = any(kw in lower for kw in ["write", "draft", "create", "generate", "make"])
+        is_markdown = not is_ship30 and asks_to_create and any(
+            kw in lower for kw in ["markdown", "document", "brief", "prd", "playbook", "guide", "checklist"]
+        )
 
-        return is_ship30, is_html
+        return is_ship30, is_html, is_markdown
 
     async def process_chat(self, db: Session, request: ChatRequest) -> ChatResponse:
         # 1. Resolve or Create Session
@@ -32,7 +56,8 @@ class AgentService:
         if not session_id:
             new_session = SessionModel(
                 title=request.message[:45] + ("..." if len(request.message) > 45 else ""),
-                model_provider=request.model_provider or "ollama"
+                model_provider=request.model_provider or "ollama",
+                user_metadata=request.user_metadata or {}
             )
             db.add(new_session)
             db.commit()
@@ -44,9 +69,13 @@ class AgentService:
                 session_record = SessionModel(
                     id=session_id,
                     title=request.message[:45] + ("..." if len(request.message) > 45 else ""),
-                    model_provider=request.model_provider or "ollama"
+                    model_provider=request.model_provider or "ollama",
+                    user_metadata=request.user_metadata or {}
                 )
                 db.add(session_record)
+                db.commit()
+            elif request.user_metadata is not None:
+                session_record.user_metadata = request.user_metadata
                 db.commit()
 
         # 2. Persist User Message
@@ -59,20 +88,62 @@ class AgentService:
         db.add(user_msg)
         db.commit()
 
-        # 3. Intent Detection & Tool Selection
-        is_ship30, is_html = self.detect_intent(request.message, request.force_skill)
-
-        # 4. Knowledge Base Hybrid Retrieval
-        chunks, citations = retrieval_service.search(request.message, top_k=4)
-
-        # 5. LLM Synthesis
-        raw_text, model_used, raw_artifact = await llm_service.generate_response(
-            prompt=request.message,
-            context_chunks=chunks,
-            provider=request.model_provider,
-            is_ship30=is_ship30,
-            is_html_artifact=is_html
+        previous_messages = (
+            db.query(MessageModel)
+            .filter(MessageModel.session_id == session_id, MessageModel.id != user_msg.id)
+            .order_by(MessageModel.created_at.desc(), MessageModel.id.desc())
+            .limit(12)
+            .all()
         )
+        conversation_history = [
+            {"role": message.role, "content": message.content}
+            for message in reversed(previous_messages)
+            if message.role in {"user", "assistant"}
+        ]
+
+        is_intro = self.is_greeting_intro(request.message)
+        if is_intro:
+            name_match = re.search(r"\bi(?:'m| am)\s+([a-z][a-z'-]*)", request.message, re.IGNORECASE)
+            name = name_match.group(1).title() if name_match else ""
+            greeting = f"Hi {name}," if name else "Hi!"
+            raw_text = f"{greeting} what product or growth question would you like to explore in the transcripts?"
+            model_used = "conversation-guidance"
+            raw_artifact = None
+            chunks, citations = [], []
+        else:
+            raw_text = None
+            model_used = None
+            raw_artifact = None
+            chunks, citations = [], []
+
+        # 3. Intent Detection & Tool Selection
+        is_ship30, is_html, is_markdown = self.detect_intent(request.message, request.force_skill)
+
+        if raw_text is None:
+            # Only carry the immediately preceding topic into an explicit follow-up.
+            prior_questions = [
+                message["content"] for message in conversation_history
+                if message["role"] == "user" and not self.is_greeting_intro(message["content"])
+            ]
+            previous_question = prior_questions[-1] if prior_questions else None
+            retrieval_context = (
+                [previous_question]
+                if previous_question and self.is_follow_up_query(request.message)
+                else []
+            )
+            retrieval_query = " ".join([*retrieval_context, request.message])
+            chunks, citations = retrieval_service.search(retrieval_query, top_k=4)
+
+            # 5. LLM Synthesis
+            raw_text, model_used, raw_artifact = await llm_service.generate_response(
+                prompt=request.message,
+                context_chunks=chunks,
+                provider=request.model_provider,
+                is_ship30=is_ship30,
+                is_html_artifact=is_html,
+                is_markdown_artifact=is_markdown,
+                conversation_history=conversation_history
+            )
 
         # 6. Artifact Sanitization & Processing
         final_artifact = None

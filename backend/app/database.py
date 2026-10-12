@@ -1,5 +1,7 @@
 import logging
-from sqlalchemy import create_engine
+# pyrefly: ignore [missing-import]
+from sqlalchemy import create_engine, inspect, text
+# pyrefly: ignore [missing-import]
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 try:
@@ -44,4 +46,10 @@ def init_db():
     except ImportError:
         from .models.schemas import SessionModel, MessageModel, ArtifactModel, CitationModel  # noqa
     Base.metadata.create_all(bind=engine)
+    with engine.begin() as connection:
+        session_columns = {column["name"] for column in inspect(connection).get_columns("sessions")}
+        if "user_metadata" not in session_columns:
+            connection.execute(
+                text("ALTER TABLE sessions ADD COLUMN user_metadata JSON NOT NULL DEFAULT '{}'" )
+            )
     logger.info("Database initialized with schema tables.")

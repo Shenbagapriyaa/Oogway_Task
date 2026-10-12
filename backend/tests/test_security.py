@@ -19,3 +19,6 @@ def test_security_injects_csp():
     sanitized, _ = security_service.sanitize_html_artifact(simple_html)
     assert "Content-Security-Policy" in sanitized
     assert "default-src 'none'" in sanitized
+    assert "img-src data:" in sanitized
+    assert "form-action 'none'" in sanitized
+    assert "img-src data: https:" not in sanitized

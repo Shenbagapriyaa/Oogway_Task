@@ -6,23 +6,23 @@
 
 ## 1. High-Level Architecture Overview
 
-The Lenny Growth Assistant is designed as a resilient, decoupled client-server architecture with an agentic retrieval-augmented generation (RAG) core, multi-provider LLM abstraction, and an isolated artifact rendering pipeline.
+The Lenny Growth Assistant is a local-first prototype with a FastAPI API, React client, lexical RAG, configurable model providers, and isolated artifact rendering. This document describes the current implementation; production deployment and semantic retrieval are not included.
 
 ```mermaid
 graph TD
     Client[React + Vite Frontend\n(Chat UI + Claude Artifact Viewer)]
-    API[FastAPI Backend Gateway\n(/api/chat, /api/sessions, /api/skills)]
-    Agent[Agentic Orchestrator\n(Tool Router, Prompt Engine)]
+    API[FastAPI Backend Gateway\n(/api/chat, /api/sessions, /api/models, /api/health)]
+    Agent[Application Intent Router\n(Retrieval and Provider Selection)]
     
     subgraph Data & Persistence
-        DB[(PostgreSQL / SQLite\nSession & Message History)]
-        Index[(BM25 & Vector Index\n50 Lenny Transcripts)]
+        DB[(SQLite local / PostgreSQL Compose\nSessions, Metadata, Messages, Citations, Artifacts)]
+        Index[(BM25 Index\n50 Lenny Transcript Files)]
     end
     
     subgraph Execution Models
         Ollama[Local Ollama LLM\n(llama3.2 / mistral)]
-        Cloud[Cloud Provider\n(Anthropic Claude / OpenAI)]
-        Fallback[Deterministic RAG Fallback\n(Zero-Dependency Engine)]
+        Cloud[Anthropic Agent SDK / OpenAI API]
+        Fallback[Excerpt-Based Fallback\n(No Generated Analysis)]
     end
     
     subgraph Skills & Security
@@ -30,10 +30,10 @@ graph TD
         Sandbox[Sandboxed Iframe Viewer\nsandbox='allow-scripts'\nNo allow-same-origin]
     end
 
-    Client -->|REST / Streaming| API
+    Client -->|REST| API
     API --> Agent
     Agent -->|Read / Write| DB
-    Agent -->|Hybrid Retrieval| Index
+    Agent -->|BM25 Retrieval + Recent User Turns| Index
     Agent -->|Model Switcher| Ollama
     Agent -->|Model Switcher| Cloud
     Agent -->|Model Switcher| Fallback
@@ -50,12 +50,12 @@ graph TD
 | Component | Responsibility | Technologies |
 | :--- | :--- | :--- |
 | **Frontend (Web UI)** | Interactive chat, split-pane Claude Artifact Viewer, model toggle badge, session management, citation modals, responsive layout. | React 18, Vite, Lucide Icons, Vanilla CSS (rich dark/light aesthetics). |
-| **API Gateway** | Request validation, session lifecycle, error handling, CORS, streaming protocol, health check endpoint. | FastAPI, Pydantic v2, Uvicorn. |
-| **Agent Layer** | Intent recognition, RAG retrieval orchestration, tool invocation (Ship 30 writer, artifact generator), memory management. | Custom Agent Orchestrator following Claude Agent SDK / Pi Agent design patterns. |
-| **Retrieval Engine** | Frontmatter extraction, speaker turn parsing, chunking (300-600 words), BM25 tokenization, dense semantic similarity, citation tracking. | Python, BM25 Okapi, TF-IDF vectorizer, regex speaker parser. |
-| **LLM Provider Layer** | Unified interface for local and cloud models with automated health verification and seamless fallback. | Ollama HTTP API, Anthropic SDK, OpenAI SDK, Grounded Fallback Engine. |
-| **Persistence Layer** | Stores chat sessions, message histories, citations, and generated artifacts with ACID guarantees. | SQLAlchemy 2.0, PostgreSQL (Supabase/Railway/Docker) with SQLite auto-fallback. |
-| **Security Sandbox** | Strict client-side isolation for executing generated HTML/CSS artifacts. | W3C Sandboxed Iframe (`allow-scripts`, no `allow-same-origin`), CSP headers. |
+| **API Gateway** | Validates requests; serves chat, session CRUD, provider status, transcript catalog, and database health. Errors are logged and returned with a stable code. | FastAPI, Pydantic v2, Uvicorn. |
+| **Application Router** | Detects essay/document/HTML requests, retrieves excerpts, passes the recent conversation, and persists the result. | Python service layer; Anthropic requests use Claude Agent SDK with built-in tools disabled. |
+| **Retrieval Engine** | Parses transcript frontmatter and speaker turns, chunks around 400 words with a one-turn overlap, ranks with BM25 and guest-name boost. | Python, custom BM25 implementation. No vector or embedding index. |
+| **LLM Provider Layer** | Uses Ollama HTTP, Anthropic Agent SDK, or OpenAI API; provider failures route to an excerpt-based fallback. | Ollama, `claude-agent-sdk`, OpenAI SDK. |
+| **Persistence Layer** | Stores sessions, optional user metadata, messages, citations, and artifacts. SQLite is the direct-run default; Compose configures PostgreSQL. | SQLAlchemy; SQLite and PostgreSQL. |
+| **Artifact Rendering** | Markdown is parsed then sanitized with DOMPurify. HTML is displayed in an iframe with scripts enabled but without same-origin privileges. | `marked`, DOMPurify, sandboxed iframe, restrictive CSP. |
 
 ---
 
@@ -73,6 +73,7 @@ erDiagram
         string id PK "UUID"
         string title "Session Title"
         string model_provider "ollama | anthropic | openai"
+        json user_metadata "Optional client metadata"
         datetime created_at "Timestamp"
         datetime updated_at "Timestamp"
     }
@@ -112,25 +113,24 @@ erDiagram
 1. **Ingestion & Parsing (`ingestion_service.py`):**
    * Reads 50 markdown transcripts from `backend/data/transcripts/`.
    * Extracts YAML frontmatter (`title`, `date`, `guest`, `channel`, `description`).
-   * Parses dialogues using speaker tag regex `\*\*([^*]+)\*\*\s*\(([^)]+)\):`.
-   * Segments into sliding window chunks of 350-500 words with 50-word overlaps to preserve conversational context.
-   * Generates a cached JSON index file (`index_cache.json`) for sub-second startup times.
+    * Parses dialogues using speaker tag regex `\*\*([^*]+)\*\*\s*\(([^)]+)\):`.
+    * Combines timestamped speaker turns into chunks of about 400 words, retaining the final speaker turn as overlap.
+    * Caches chunks in `index_cache.json`; the cache is loaded on later starts and is not freshness-checked against transcript edits.
 
-2. **Hybrid Retrieval (`retrieval_service.py`):**
-   * Computes BM25 Okapi lexical scores for keyword precision (e.g. "Elena Verna", "recapture product market fit", "barrels vs ammo").
-   * Computes TF-IDF / dense cosine vector similarity across chunk tokens.
-   * Reranks and selects Top-K chunks ($K=4$), merging adjacent chunks from the same episode to prevent fragmented context.
-   * Extracts structured citations with guest name, title, timestamp, and verifiable quote snippet.
+2. **Lexical Retrieval (`retrieval_service.py`):**
+    * Ranks transcript chunks with BM25 and a guest-name match boost.
+    * Includes recent user questions in the search query for short follow-ups; it does not compute semantic embeddings or dense vector similarity.
+    * Selects up to four qualifying chunks and emits guest, episode, chunk-start timestamp, and a short excerpt as citation data.
 
 ---
 
 ## 5. Flexible LLM Abstraction & Fallback Topology
 
-The system implements a unified `LLMClient` interface:
-* `LocalOllamaClient`: Dispatches to `http://localhost:11434/api/generate` or `http://localhost:11434/api/chat`.
-* `AnthropicClient`: Dispatches to `https://api.anthropic.com/v1/messages` (Claude 3.5 Sonnet / Haiku).
-* `OpenAIClient`: Dispatches to `https://api.openai.com/v1/chat/completions` (GPT-4o / GPT-4o-mini).
-* `GroundedFallbackClient`: When Ollama is offline and cloud API keys are absent, dynamically extracts the synthesized answer from the retrieved transcript chunks and returns full citations and artifacts.
+Provider routing is implemented in `llm_service.py`:
+* Ollama uses the local `/api/generate` endpoint.
+* Anthropic uses the Claude Agent SDK `query()` API with built-in tools disabled, settings loading disabled, one turn, and a request timeout.
+* OpenAI uses the Chat Completions API.
+* Provider failures or missing credentials return a deterministic response containing retrieved excerpts. Offline essay/document output is a source brief, not a generated long-form essay.
 
 ### Fallback Decision Matrix:
 ```mermaid
@@ -139,15 +139,15 @@ graph TD
     
     CheckSelected -->|Local Ollama| PingOllama{Ollama Responding?}
     PingOllama -->|Yes| ExecOllama[Execute Ollama Model]
-    PingOllama -->|No| AutoFallback[Log Warning + Fallback to Grounded Engine + Alert User]
+    PingOllama -->|No| AutoFallback[Log Warning + Excerpt-Based Fallback]
     
-    CheckSelected -->|Cloud Claude/OpenAI| CheckKey{API Key Configured?}
+    CheckSelected -->|Anthropic / OpenAI| CheckKey{API Key Configured?}
     CheckKey -->|Yes| ExecCloud[Execute Cloud Model]
     CheckKey -->|No| AutoFallback
     
     ExecOllama --> Render[Return Grounded Answer + Citations + Artifacts]
     ExecCloud --> Render
-    AutoFallback --> Render
+    AutoFallback --> Render[Return excerpts and honest fallback notice]
 ```
 
 ---
@@ -176,15 +176,15 @@ When an LLM generates HTML/CSS, untrusted code could theoretically:
 3. Redirect the user's browser window (`top.location.href`).
 4. Execute malicious browser exploits.
 
-### Defense-in-Depth Implementation:
-1. **Server-Side Sanitization (`security_service.py`):**
-   * Inspects HTML for dangerous protocols (`javascript:`, `data:`, `vbscript:`).
-   * Strips parent window manipulation (`parent.location`, `top.location`, `window.parent.postMessage`).
-2. **Client-Side Iframe Isolation (`ArtifactViewer.jsx`):**
+### Current Controls and Limits:
+1. **Server-Side Inspection (`security_service.py`):**
+    * Applies pattern-based checks and adds a CSP meta policy. The checks are not a general-purpose HTML sanitizer.
+2. **Client-Side HTML Isolation (`ArtifactViewer.jsx`):**
    * Uses an `<iframe>` rendered via `srcDoc`.
    * **Attributes:** `sandbox="allow-scripts"` (strictly NO `allow-same-origin`).
    * **Why this works:** Without `allow-same-origin`, the browser treats the iframe as a unique, opaque null-origin. It CANNOT access the parent host's cookies, localStorage, DOM, or API headers.
-   * Content Security Policy (CSP) meta tag injected into the document head restricting connections to `connect-src 'none'`.
+    * CSP blocks network connections, remote images/fonts, forms, frames, and plugins. Inline script remains available for interactive prototypes, confined to the sandbox.
+3. **Markdown Rendering:** `marked` output is sanitized with DOMPurify before insertion into the chat or artifact pane.
 
 ---
 
@@ -198,7 +198,4 @@ The application supports three zero-friction deployment targets:
 2. **Docker Compose:**
    * Single command: `docker compose up --build`
    * Services: `frontend`, `backend`, `postgres`, and optional `ollama`.
-3. **Cloud Production (Supabase + Railway / Render):**
-   * Database: Hosted Supabase PostgreSQL.
-   * Backend: Railway container with `DATABASE_URL` and `ANTHROPIC_API_KEY`.
-   * Frontend: Vercel or Netlify static build.
+3. **Hosted Deployment:** Supabase/Railway/Vercel are possible targets, but no hosted deployment configuration or production validation is included in this repository.

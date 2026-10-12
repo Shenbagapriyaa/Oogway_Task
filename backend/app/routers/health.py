@@ -1,3 +1,4 @@
+import logging
 from fastapi import APIRouter
 from app.config import settings
 from app.database import engine
@@ -7,14 +8,22 @@ from app.services.ingestion_service import ingestion_service
 from app.models.schemas import HealthStatus, ModelStatusResponse
 
 router = APIRouter(prefix="/api", tags=["System & Health"])
+logger = logging.getLogger(__name__)
 
 @router.get("/health", response_model=HealthStatus)
 def health_check():
     db_type = "PostgreSQL" if "postgresql" in str(engine.url) else "SQLite"
     chunks_count = len(retrieval_service.retriever.chunks) if retrieval_service.is_initialized else len(ingestion_service.chunks)
+    try:
+        with engine.connect():
+            database_status = "connected"
+    except Exception:
+        logger.exception("Database health check failed")
+        database_status = "unavailable"
 
     return HealthStatus(
-        status="healthy",
+        status="healthy" if database_status == "connected" else "degraded",
+        database_status=database_status,
         app_name=settings.APP_NAME,
         version=settings.VERSION,
         database=db_type,

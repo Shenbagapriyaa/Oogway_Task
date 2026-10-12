@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Sparkles, FileText, Layout, ArrowRight } from 'lucide-react';
 import { CitationCard } from './CitationCard';
-import { marked } from 'marked';
+import { renderMarkdown } from '../utils/renderMarkdown';
 
 export function ChatPane({
   messages,
@@ -43,7 +43,8 @@ export function ChatPane({
             </p>
 
             <div className="quick-prompts-grid">
-              <div 
+              <button
+                type="button"
                 className="prompt-card"
                 onClick={() => onPromptClick("What did Elena Verna say about AI companies having to recapture product-market fit every 3 months?")}
               >
@@ -53,9 +54,10 @@ export function ChatPane({
                 <div className="prompt-card-text">
                   "Why must AI companies recapture product-market fit every 3 months?"
                 </div>
-              </div>
+              </button>
 
-              <div 
+              <button
+                type="button"
                 className="prompt-card"
                 onClick={() => onPromptClick("Write a Ship 30 for 30 essay on Elena Verna's product-led growth loops and Lovable's scaling playbook", "ship30")}
               >
@@ -65,9 +67,10 @@ export function ChatPane({
                 <div className="prompt-card-text">
                   "Generate a ~1,250-word atomic essay on Lovable's PLG loops and reinvention."
                 </div>
-              </div>
+              </button>
 
-              <div 
+              <button
+                type="button"
                 className="prompt-card"
                 onClick={() => onPromptClick("Build an interactive HTML/CSS Viral Coefficient and K-Factor calculator", "artifact_html")}
               >
@@ -77,9 +80,10 @@ export function ChatPane({
                 <div className="prompt-card-text">
                   "Build an interactive viral growth calculator with slider controls."
                 </div>
-              </div>
+              </button>
 
-              <div 
+              <button
+                type="button"
                 className="prompt-card"
                 onClick={() => onPromptClick("What is Keith Rabois's concept of hiring Barrels vs. Ammo?")}
               >
@@ -89,7 +93,7 @@ export function ChatPane({
                 <div className="prompt-card-text">
                   "Explain the Barrels vs. Ammo hiring framework and how to spot barrels."
                 </div>
-              </div>
+              </button>
             </div>
           </div>
         ) : (
@@ -105,7 +109,7 @@ export function ChatPane({
 
                 <div className="message-bubble">
                   {isAssistant ? (
-                    <div dangerouslySetInnerHTML={{ __html: marked.parse(m.content) }} />
+                    <div dangerouslySetInnerHTML={{ __html: renderMarkdown(m.content) }} />
                   ) : (
                     <div>{m.content}</div>
                   )}
@@ -118,7 +122,8 @@ export function ChatPane({
                   {/* Produced Artifact Attachment */}
                   {isAssistant && m.artifacts && m.artifacts.length > 0 && (
                     m.artifacts.map((art) => (
-                      <div
+                      <button
+                        type="button"
                         key={art.id || art.title}
                         className="artifact-attachment-card"
                         onClick={() => onOpenArtifact(art)}
@@ -135,7 +140,7 @@ export function ChatPane({
                           </div>
                         </div>
                         <ArrowRight size={16} color="#818cf8" />
-                      </div>
+                      </button>
                     ))
                   )}
                 </div>
@@ -162,6 +167,7 @@ export function ChatPane({
         <div className="input-container">
           <textarea
             className="input-field"
+            aria-label="Message the Lenny Growth Assistant"
             placeholder="Ask a product or growth question from Lenny's library..."
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
@@ -190,6 +196,8 @@ export function ChatPane({
 
             <button
               className="btn-send"
+              type="button"
+              aria-label="Send message"
               onClick={handleSubmit}
               disabled={!inputText.trim() || isLoading}
             >

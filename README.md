@@ -1,202 +1,161 @@
 # The Lenny Growth Assistant
-> **Forward Deployed Engineer Engagement Submission**  
-> AI-powered product and growth intelligence platform grounded in Lenny’s Podcast transcripts, featuring Claude-style native artifact rendering and a dedicated Ship 30 for 30 digital writing skill.
 
----
+This is a small full-stack assistant for searching Lenny’s Podcast transcripts and turning relevant excerpts into a chat response, a Ship 30 for 30-style essay, or an HTML artifact. It is built for the Forward Deployed Engineer take-home: the goal is to make the knowledge base easy to try, inspect, and run locally.
 
-## 1. Executive Summary & Engagement Context
+The repository includes a FastAPI backend, a React/Vite frontend, 50 transcript files, and a PostgreSQL service for Docker Compose. For a lightweight local run, the backend uses SQLite. Ollama is the intended local model; Anthropic and OpenAI can also be selected when API keys are configured.
 
-A product and growth organization required a grounded internal assistant to turn over 150+ hours of Lenny’s Podcast transcripts into reliable strategic counsel, reusable Ship 30 for 30 content, and native interactive artifacts—without requiring non-technical PMs to understand prompts or infrastructure.
+## What works today
 
-**Key Technical & Product Highlights:**
-* **Hybrid Grounded RAG:** Ingests 50 complete transcripts from Lenny's library with dialogue chunking, speaker parsing, and sub-50ms BM25 Okapi hybrid retrieval with exact citations and timestamps.
-* **Ship 30 for 30 Content Skill:** Algorithmic prompt skill encoding Nicolas Cole & Dickie Bush’s digital writing architecture into ~1,250-word atomic essays with 1-3-1 cadence, 4 actionable pillars, selective bolding, and immediate takeaways.
-* **Claude-Style Artifact Viewer:** Interactive side-by-side split screen rendering rich Markdown and complete HTML/CSS prototypes (e.g. viral growth calculators) directly beside the chat stream.
-* **Strict Security Isolation:** Untrusted HTML artifacts are isolated inside a sandboxed `<iframe>` (`sandbox="allow-scripts"` strictly omitting `allow-same-origin`) with injected Content Security Policy headers to block cookie/token theft and host DOM manipulation.
-* **Flexible LLM Layer:** Multi-provider architecture supporting **Local Ollama** (mandatory for local demo), **Anthropic Claude**, **OpenAI**, and an intelligent **Grounded Fallback Engine** for zero-friction evaluation.
-* **Persistent Sessions:** PostgreSQL persistence (Supabase / Railway / Docker) with automatic, seamless fallback to persistent local SQLite.
+- Chat requests retrieve up to four transcript chunks and return citations with the guest, episode title, timestamp, and an excerpt.
+- The Ship 30 skill provides a writing prompt for configured LLMs. If no model is available, fallback returns a short, cited source brief rather than claiming to produce a full-length essay.
+- The artifact pane displays Markdown and HTML beside the conversation. HTML is rendered in an iframe with `sandbox="allow-scripts"` and no `allow-same-origin`.
+- Sessions, optional user metadata, messages, citations, and artifacts are stored in the database. The session API supports creating, listing, reading, and deleting sessions.
+- Recent conversation turns are included in provider prompts; recent user questions are also included in follow-up retrieval queries.
+- The model selector offers Ollama, Anthropic, OpenAI, and the deterministic grounded fallback. If a selected model cannot be used, the backend falls back rather than returning a model response error.
 
----
+There are a few important boundaries to be aware of when evaluating the project:
 
-## 2. Architecture Overview
+- Retrieval is lexical BM25 with a guest-name boost. It does not currently use embeddings or semantic/vector search.
+- The application routes intents itself. Anthropic requests use Claude Agent SDK with built-in tools disabled; Ollama and OpenAI use their provider APIs directly.
+- Local development defaults to SQLite. PostgreSQL is configured in Docker Compose, rather than being the local default.
+- The deterministic fallback returns retrieved excerpts without adding advice. Its offline essay/document output is a short source brief; the built-in offline calculator is a generic example, not transcript-derived.
+- Prompt constraints and citations improve traceability, but cannot guarantee every model-generated claim is supported. Check the cited transcript before relying on an answer.
+- Transcript search is lexical BM25, not semantic or vector search.
 
-```
-+------------------------------------------------------------------------------------------------+
-|                                    REACT + VITE FRONTEND                                       |
-|  - Split-Screen Layout       - Claude-Style Artifact Viewer      - Provider Toggle & Badge     |
-|  - Interactive Citations     - Session History Sidebar           - Dark Mode & Glassmorphism   |
-+-----------------------------------------------+------------------------------------------------+
-                                                | HTTP / REST (Vite Proxy :5173 -> :8000)
-                                                v
-+------------------------------------------------------------------------------------------------+
-|                                    FASTAPI BACKEND GATEWAY                                     |
-|  - Lifespan Ingestion Engine - Pydantic v2 Contracts             - Security Sanitization       |
-|  - Session Persistence       - Structured Error Handling         - Health & Diagnostics API    |
-+-----------------------------------------------+------------------------------------------------+
-                                                |
-               +--------------------------------+--------------------------------+
-               |                                                                 |
-               v                                                                 v
-+-----------------------------+                                   +------------------------------+
-|   HYBRID RETRIEVAL CORE     |                                   |     AGENT & LLM PROVIDER     |
-|  - 50 Ingested Transcripts  |                                   |  - Local Ollama (llama3.2)   |
-|  - Speaker Dialogue Parser  |                                   |  - Anthropic Claude 3.5      |
-|  - BM25 Okapi + Entity Boost|                                   |  - OpenAI GPT-4o             |
-|  - Verified Quote Citations |                                   |  - Grounded Fallback Engine  |
-+-----------------------------+                                   +------------------------------+
-               |                                                                 |
-               +--------------------------------+--------------------------------+
-                                                v
-+------------------------------------------------------------------------------------------------+
-|                                    PERSISTENCE & STORAGE                                       |
-|  - PostgreSQL (Supabase / Railway / Docker Compose)                                            |
-|  - Auto-Fallback to Persistent Local SQLite (data/lenny_assistant.db)                           |
-+------------------------------------------------------------------------------------------------+
+These distinctions matter because several are narrower than the original assignment asks for. They are listed here so an evaluator can see what the implementation does without having to infer it from the code.
+
+## Requirements
+
+- Python 3.10 or newer
+- Node.js 18 or newer and npm
+- Ollama for model-backed local responses (optional for starting the app; the fallback can be used without it)
+- Docker Desktop with Compose, if you prefer the containerized setup
+
+## Run locally
+
+From the repository root, install the Python and frontend dependencies. On Windows PowerShell:
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r backend/requirements.txt
+npm --prefix frontend install
+Copy-Item .env.example backend/.env
 ```
 
-For complete database schema diagrams, component boundaries, and security models, see [`architecture.md`](file:///architecture.md).
+The local backend process runs with `backend/` as its working directory, so its settings load `backend/.env`. The example defaults to Ollama and SQLite. If you do not want to use environment-file settings for local development, the same values can be set in your shell.
 
----
+Install and start Ollama, then fetch the model configured in `backend/.env`:
 
-## 3. Prerequisites
+```powershell
+ollama pull llama3.2
+```
 
-* **Python:** 3.10+ (Tested on Python 3.11 and Python 3.13)
-* **Node.js:** v18+ (Tested on Node v20 and v24)
-* **Local LLM (Mandatory for Demo):** [Ollama](https://ollama.ai/) installed with model `llama3.2` or `mistral`.
-  *(Note: If Ollama is not installed or offline, the app automatically engages the Grounded Fallback Engine so all features remain testable without setup blockers).*
-* **Optional:** Docker & Docker Compose (for containerized startup).
+Start the API and frontend together:
 
----
-
-## 4. Quick Start (One-Command Startup)
-
-### Option A: Direct Python Runner (Recommended for Local Dev)
-
-Clone the repository and run the unified startup script:
-
-```bash
-# 1. Install Backend Dependencies
-pip install -r backend/requirements.txt
-
-# 2. Install Frontend Dependencies
-cd frontend && npm install && cd ..
-
-# 3. Launch both servers with one command
+```powershell
 python run.py
 ```
-*(On Windows, you can also double-click `run.bat`)*
 
-**What this does:**
-1. Verifies the 50 ingested transcripts in `backend/data/transcripts/`.
-2. Starts the **FastAPI Backend** on `http://localhost:8000`.
-3. Starts the **React Vite Frontend** on `http://localhost:5173`.
-4. Automatically opens your default web browser to `http://localhost:5173`.
+Open [http://localhost:5173](http://localhost:5173). The API docs are at [http://localhost:8000/docs](http://localhost:8000/docs), and the health endpoint is [http://localhost:8000/api/health](http://localhost:8000/api/health). Press `Ctrl+C` in the runner terminal to stop both processes.
 
----
+On macOS or Linux, use `python3` and `source .venv/bin/activate` for the corresponding setup commands; the remaining commands are the same.
 
-### Option B: Docker Compose (One Command)
+## Run with Docker Compose
 
-```bash
+From the repository root, copy the example file to `.env` so Compose can read optional cloud API keys, then start the services:
+
+```powershell
+Copy-Item .env.example .env
 docker compose up --build
 ```
-* **Frontend:** `http://localhost:5173`
-* **Backend API:** `http://localhost:8000`
-* **API Docs:** `http://localhost:8000/docs`
-* **PostgreSQL:** `localhost:5432`
 
----
+Compose starts the frontend, FastAPI backend, PostgreSQL, and an Ollama container. The Ollama container does not download a model automatically. In a second terminal, pull the configured model once:
 
-## 5. Local & Cloud Model Configuration
-
-Copy the example environment file:
-```bash
-cp .env.example .env
+```powershell
+docker compose exec ollama ollama pull llama3.2
 ```
 
-### 1. Local Ollama (Mandatory for Demo)
-1. Download and run Ollama from [ollama.ai](https://ollama.ai).
-2. Pull the lightweight model:
-   ```bash
-   ollama run llama3.2
-   ```
-3. Set in `.env`:
-   ```ini
-   DEFAULT_PROVIDER=ollama
-   OLLAMA_BASE_URL=http://localhost:11434
-   OLLAMA_MODEL=llama3.2
-   ```
+The app is at [http://localhost:5173](http://localhost:5173), the API at [http://localhost:8000](http://localhost:8000), and PostgreSQL is exposed on port `5432`. The Compose file contains development database credentials; do not reuse them for a deployed or shared environment. Stop the stack with `Ctrl+C`, or run `docker compose down` in another terminal. `docker compose down -v` also deletes the database and model volumes.
 
-### 2. Cloud Providers (Anthropic / OpenAI)
-To enable Cloud LLMs, add your API keys to `.env`:
-```ini
-ANTHROPIC_API_KEY=sk-ant-api...
-ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
+## Models and configuration
 
-OPENAI_API_KEY=sk-proj...
-OPENAI_MODEL=gpt-4o
-```
-You can toggle between providers in real-time using the **Engine Selector** in the top navigation bar.
+The environment variables are listed in `.env.example`.
 
-### 3. Graceful Fallback Behavior
-If Ollama is unreachable at `localhost:11434` and no cloud keys are provided:
-* The system logs a diagnostic notice and engages the **Deterministic Grounded Fallback Engine**.
-* Queries, grounded citations, Ship 30 for 30 essays, and interactive HTML artifacts continue functioning seamlessly.
+| Variable | Purpose |
+|---|---|
+| `DEFAULT_PROVIDER` | Default provider (`ollama`, `anthropic`, or `openai`) when a request does not choose one. |
+| `OLLAMA_BASE_URL` | Ollama API address. Use `http://localhost:11434` for the direct local runner; Compose sets the service address for its backend. |
+| `OLLAMA_MODEL` | Local model name, default `llama3.2`. Pull it with Ollama before selecting it. |
+| `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` | Optional Anthropic credentials and model. |
+| `OPENAI_API_KEY`, `OPENAI_MODEL` | Optional OpenAI credentials and model. |
+| `DATABASE_URL` | Optional PostgreSQL URL for direct backend runs. If unset, the app uses local SQLite. Compose supplies its own PostgreSQL URL. |
 
----
+The selected provider is visible in the top navigation. Anthropic runs through Claude Agent SDK with built-in tools disabled; Ollama and OpenAI use their HTTP/API clients. A missing cloud key, unavailable Ollama instance, or provider call failure routes to the deterministic fallback. The fallback shows retrieved excerpts and makes no synthesized claims. Offline HTML uses a generic calculator example.
 
-## 6. Running Automated Tests
+Do not commit `.env` files or put API keys in frontend code. For direct local runs, place settings in `backend/.env`; for Compose, place optional cloud keys in the root `.env`.
 
-A comprehensive 12-test automated suite validates the API, database persistence, BM25 retrieval, Ship 30 for 30 skill, and security sandboxing.
+## Knowledge base and citations
 
-Run the test suite with:
-```bash
+Transcript Markdown files live in `backend/data/transcripts/`. At startup, the ingestion service reads frontmatter and timestamped speaker turns, combines turns into chunks of about 400 words with a one-turn overlap, and writes the result to `backend/data/index_cache.json`. The cache is loaded on later starts; remove it to force a rebuild. The current corpus contains 50 transcript files.
+
+The retrieval service ranks chunks with BM25 and boosts guest-name matches. It returns up to four qualifying chunks. Citations include the guest, episode title, the chunk’s starting timestamp, and a short excerpt. The index is local JSON; it is not a hosted vector database, and there is no automatic remote transcript refresh.
+
+## API overview
+
+All API endpoints are served by FastAPI on port `8000`.
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `POST` | `/api/chat` | Send a message, optional session ID, provider, and optional skill trigger. |
+| `GET` | `/api/sessions` | List saved sessions. |
+| `POST` | `/api/sessions` | Create a session. |
+| `GET` | `/api/sessions/{session_id}` | Read a session and its messages, citations, and artifacts. |
+| `DELETE` | `/api/sessions/{session_id}` | Delete a session and its related records. |
+| `GET` | `/api/models/status` | Check Ollama and configured cloud providers. |
+| `GET` | `/api/transcripts` | List indexed episode metadata. |
+| `GET` | `/api/health` | Return application, database type, database connection status, and index status. |
+
+The interactive OpenAPI documentation is available at `/docs`. Chat input is validated as non-empty; application failures are logged and returned with a stable error code and message.
+
+## Artifact safety
+
+Generated HTML is inspected by the backend and rendered in an iframe with `sandbox="allow-scripts"`, without `allow-same-origin`. That keeps the preview on an opaque origin and separates it from the parent page’s DOM and storage. The HTML also receives a restrictive Content Security Policy intended to block network connections and other embedding. The sanitizer is a lightweight pattern-based filter, not a general HTML security sanitizer, so the iframe boundary is the primary isolation control.
+
+Markdown is parsed with `marked` and sanitized with DOMPurify before it is inserted into chat or the artifact viewer. This blocks unsafe markup and attributes, but still warrants security review before production use.
+
+## Tests
+
+Run the backend tests from the repository root:
+
+```powershell
 python -m pytest backend/tests -v
 ```
 
-### Test Coverage Summary:
-- [x] `test_health_endpoint`: Validates application status and indexed transcript count.
-- [x] `test_models_status_endpoint`: Verifies live provider discovery.
-- [x] `test_transcripts_endpoint`: Validates transcript metadata catalog.
-- [x] `test_session_lifecycle`: Full CRUD test on sessions in persistent database.
-- [x] `test_chat_grounded_response`: End-to-end conversation turn verifying citations.
-- [x] `test_retrieval_elena_verna`: Grounded retrieval on Elena Verna (Lovable, PMF loops).
-- [x] `test_retrieval_keith_rabois`: Grounded retrieval on Keith Rabois (Barrels vs. Ammo).
-- [x] `test_out_of_domain_query`: Rejection and disclaimer handling for ungrounded queries.
-- [x] `test_security_blocks_parent_escape`: Blocks iframe window breakout exploits.
-- [x] `test_security_blocks_cookie_stealing`: Blocks untrusted script cookie/token access.
-- [x] `test_security_injects_csp`: Verifies Content Security Policy header injection.
-- [x] `test_ship30_essay_structure`: Verifies ~1,250 words, hook, 4 pillars, and selective bolding.
+There are 18 backend tests covering health and model status, session persistence and metadata, chat history and error responses, provider routing, retrieval, source-brief fallback, and selected HTML sandbox protections. The Agent SDK route test is mocked; it does not make a live Anthropic request. The tests use the configured database engine and do not replace a separate PostgreSQL integration test. The frontend has a production build check but no automated component test suite.
 
-For manual UI verification steps, see [`manual_test_plan.md`](file:///manual_test_plan.md).
+For a browser walkthrough, see [manual_test_plan.md](manual_test_plan.md). The browser checks are intentionally marked not run until someone performs them interactively.
 
----
+## Project notes
 
-## 7. Deliverables & Documentation Index
+- [PRD.md](PRD.md) describes the user, success measures, scope, assumptions, and risks.
+- [architecture.md](architecture.md) documents the current components, data flow, persistence, and artifact isolation.
+- [design.md](design.md) covers the interface and interaction design.
+- [agent_transcripts/](agent_transcripts/) contains development-session notes.
+- [demo_guide.md](demo_guide.md) is a suggested outline for the demo recording; the video itself still needs to be recorded and uploaded separately.
 
-| Deliverable | File | Description |
-|---|---|---|
-| **Product Brief & PRD** | [`PRD.md`](file:///PRD.md) | Discovery brief, JTBD, success metrics, scope decisions, and risk matrix. |
-| **System Architecture** | [`architecture.md`](file:///architecture.md) | Database schema, API contracts, BM25 retrieval pipeline, and security model. |
-| **UI/UX Design Spec** | [`design.md`](file:///design.md) | UI principles, dark mode tokens, split-screen architecture, and a11y. |
-| **Agent Transcripts** | [`agent_transcripts/`](file:///agent_transcripts/) | Full agent execution trajectory, failed attempts, and technical corrections. |
-| **Demo Video Guide** | [`demo_guide.md`](file:///demo_guide.md) | Word-for-word 2-3 minute demo video script with YouTube submission notes. |
-| **Manual Test Plan** | [`manual_test_plan.md`](file:///manual_test_plan.md) | 12-step interactive verification checklist for evaluators. |
+## Troubleshooting
 
----
+**The UI opens, but replies say Ollama is unavailable.** Start Ollama and confirm the configured model is installed with `ollama list`. For Docker Compose, pull it in the `ollama` service as shown above. If the selected model cannot be reached, the app uses its deterministic fallback.
 
-## 8. Troubleshooting & Operational FAQ
+**The frontend cannot reach the API.** Check that both processes started and that ports `5173` and `8000` are available. The Vite development server proxies `/api` requests to the backend.
 
-### Q: What if Ollama is not running on my machine?
-**A:** The assistant detects when `localhost:11434` is offline, shows an amber indicator, and seamlessly activates the Grounded Fallback Engine. You can still test Q&A, citations, Ship 30 essays, and interactive artifacts without running Ollama. To start Ollama, install it from [ollama.ai](https://ollama.ai) and run `ollama run llama3.2`.
+**A cloud provider uses the fallback instead.** Confirm the API key is in the correct environment file and restart the backend. Direct local runs read `backend/.env`; Docker Compose reads the root `.env` for cloud keys.
 
-### Q: What database is used?
-**A:** The backend defaults to persistent SQLite at `backend/data/lenny_assistant.db` for zero-friction setup. If you specify a PostgreSQL connection string in `DATABASE_URL` (e.g. Supabase, Railway, or local Docker), it automatically connects to PostgreSQL.
+**The transcript index looks stale.** Stop the backend, remove `backend/data/index_cache.json`, then start it again to rebuild the cache from the Markdown files.
 
-### Q: How is untrusted HTML isolated?
-**A:** HTML artifacts are rendered inside an `<iframe>` with `sandbox="allow-scripts"` (strictly omitting `allow-same-origin`). This assigns the iframe an opaque null-origin, mathematically preventing it from accessing the host's cookies, localStorage, or parent DOM. In addition, an inline CSP (`default-src 'none'`) restricts external network requests.
+**The database is unavailable.** A direct local run normally uses SQLite. Compose starts PostgreSQL and waits for its health check before starting the backend. The application does not currently perform a database readiness check in `/api/health`.
 
----
+## Attribution
 
-## 9. License & Attribution
-
-Transcripts and interview content are property of [Lenny's Podcast / Newsletter](https://www.lennysnewsletter.com/). Built for the Forward Deployed Engineer technical engagement.
+Lenny’s Podcast transcripts and related interview content belong to their respective owners. This project is an internal-assistant prototype for the take-home assignment, not an official Lenny’s product.

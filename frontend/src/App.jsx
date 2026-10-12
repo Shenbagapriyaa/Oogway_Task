@@ -11,6 +11,7 @@ export function App() {
   const [activeArtifact, setActiveArtifact] = useState(null);
   const [isArtifactExpanded, setIsArtifactExpanded] = useState(false);
   const [selectedModel, setSelectedModel] = useState('ollama');
+  const [theme, setTheme] = useState(() => localStorage.getItem('lenny-theme') || 'dark');
   const [modelStatus, setModelStatus] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
@@ -71,6 +72,11 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem('lenny-theme', theme);
+  }, [theme]);
+
+  useEffect(() => {
     if (activeSessionId) {
       loadSessionMessages(activeSessionId);
     } else {
@@ -120,7 +126,8 @@ export function App() {
           message: text,
           session_id: activeSessionId,
           model_provider: selectedModel,
-          force_skill: forceSkill
+          force_skill: forceSkill,
+          user_metadata: { client: 'web' }
         })
       });
 
@@ -163,6 +170,8 @@ export function App() {
         selectedModel={selectedModel}
         onModelChange={setSelectedModel}
         modelStatus={modelStatus}
+        theme={theme}
+        onToggleTheme={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')}
         onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
         onNewChat={handleNewChat}
       />
